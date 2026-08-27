@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Long Way Home</title>
+<style>
+  :root{
+    --ink:#2b2038; --paper:#f6efe4; --panel:#3a2c4a; --panel2:#4a3960;
+    --accent:#ffcf6b; --accent2:#ff9ec4;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(circle at 50% 0%, #4a3960 0%, #241a30 70%);
+    color:var(--paper); font-family:"Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:16px;
+    -webkit-user-select:none; user-select:none; touch-action:manipulation;
+  }
+  #wrap{width:100%; max-width:640px}
+  h1{
+    margin:0 0 10px; font-size:clamp(20px,5vw,30px); letter-spacing:.5px;
+    text-align:center; color:var(--accent); text-shadow:0 2px 0 #00000055;
+  }
+  #stage{position:relative; border-radius:14px; overflow:hidden;
+    box-shadow:0 14px 40px #0008, 0 0 0 4px #00000033; background:#1d1528}
+  canvas{display:block; width:100%; height:auto; image-rendering:auto}
+  .overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column; gap:10px;
+    align-items:center; justify-content:center; text-align:center; padding:24px;
+    background:#241a30ee; backdrop-filter:blur(2px);
+  }
+  .overlay h2{margin:0; font-size:clamp(22px,6vw,34px); color:var(--accent)}
+  .overlay p{margin:0; max-width:34ch; line-height:1.5; font-size:15px; opacity:.92}
+  .overlay .go{margin-top:6px; font-size:14px; color:var(--accent2); animation:pulse 1.4s infinite}
+  @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+  #hud{
+    display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;
+    margin-top:10px; font-size:14px;
+  }
+  #hud .pill{background:var(--panel); padding:6px 12px; border-radius:999px; box-shadow:inset 0 -2px 0 #0003}
+  #where{font-weight:bold; color:var(--accent)}
+  #msg{min-height:20px; margin-top:8px; font-size:14px; color:var(--accent2); text-align:center}
+  #keys{margin-top:6px; font-size:12px; opacity:.65; text-align:center; line-height:1.7}
+  kbd{background:#0004; border-radius:4px; padding:1px 6px; font-family:inherit}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>The Long Way Home</h1>
+  <div id="stage">
+    <canvas id="game" width="600" height="440"></canvas>
+    <div class="overlay" id="overlay">
+      <h2>The Long Way Home</h2>
+      <p>You are a little lost toy. Five memories are scattered between here and home. Find them, solve what blocks the way, and get back.</p>
+      <div class="go">press any key &nbsp;/&nbsp; tap to begin</div>
+    </div>
+  </div>
+  <div id="hud">
+    <span class="pill">📍 <span id="where">Under the Bed</span></span>
+    <span class="pill">✨ <span id="stars">0</span> / 5 memories</span>
+    <span class="pill">🔑 <span id="keycount">0</span></span>
+  </div>
+  <div id="msg"></div>
+  <div id="keys">
+    <kbd>← ↑ → ↓</kbd> or <kbd>W A S D</kbd> walk &nbsp;·&nbsp; <kbd>Z</kbd> undo &nbsp;·&nbsp; <kbd>R</kbd> restart room &nbsp;·&nbsp; <kbd>M</kbd> mute<br>
+    on a tablet: swipe to walk
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   LEVELS — Evie, this is your part. Draw rooms with these characters:
+
+     #  wall                 .  floor
+     @  where the toy starts (only in the first room)
+     X  crate you can push   o  pressure plate (cover them all to open gates)
+     G  gate (opens when every plate in the room is covered)
+     K  key                  D  locked door (needs a key)
+     ~  water (push a crate in to make a bridge)
+     *  a memory to collect  H  HOME
+     1-9 doorways. A doorway links to the SAME number listed in "links".
+
+   Every room is 15 characters wide and 11 rows tall.
+   Add a new room by copying a block below and adding it to the links.
+   ========================================================================= */
+
+const ROOMS = {
+  bedroom: {
+    name: "Under the Bed",
+    hint: "Walk with the arrow keys. Grab the sparkle, then head out the doorway.",
+    map: [
+      '###############',
+      '#.............#',
+      '#....###......#',
+      '#......#...*..#',
+      '#......#......#',
+      '#......#......1',
+      '#..#####......#',
+      '#.............#',
+      '#....@........#',
+      '#.............#',
+      '###############'
+    ],
+    links: { '1': ['hall', '2'] }
+  },
+
+  hall: {
+    name: "The Long Hallway",
+    hint: "Push both crates onto the round plates. The gate is watching.",
+    map: [
+      '###############',
+      '2.............#',
+      '#.............#',
+      '#....X...X....#',
+      '#.............#',
+      '#......*......#',
+      '#....o...o....#',
+      '#.............#',
+      '#######G#######',
+      '#............3#',
+      '###############'
+    ],
+    links: { '2': ['bedroom', '1'], '3': ['garden', '4'] }
+  },
+
+  garden: {
+    name: "The Tangled Garden",
+    hint: "That door is locked. Something shiny is hiding on the right.",
+    map: [
+      '###############',
+      '4.............#',
+      '#.......#.....#',
+      '#.......#..K..#',
+      '#.......#.....#',
+      '#.......#.....#',
+      '#.......#######',
+      '#......*......#',
+      '#######D#######',
+      '#............5#',
+      '###############'
+    ],
+    links: { '4': ['hall', '3'], '5': ['creek', '6'] }
+  },
+
+  creek: {
+    name: "The Cold Creek",
+    hint: "Toys should not swim. But crates make wonderful bridges.",
+    map: [
+      '###############',
+      '6.............#',
+      '#......X......#',
+      '#.............#',
+      '#~~~~~~~~~~~~~#',
+      '#.............#',
+      '#......*......#',
+      '#.............#',
+      '#............7#',
+      '#.............#',
+      '###############'
+    ],
+    links: { '6': ['garden', '5'], '7': ['porch', '8'] }
+  },
+
+  porch: {
+    name: "The Front Porch",
+    hint: "Home is right there. Two crates, two plates, one last gate.",
+    map: [
+      '###############',
+      '8.............#',
+      '#..X.......X..#',
+      '#.............#',
+      '#..o.#####.o..#',
+      '#....#.H.#....#',
+      '#....##G##....#',
+      '#.............#',
+      '#.....*.......#',
+      '#.............#',
+      '###############'
+    ],
+    links: { '8': ['creek', '7'] }
+  }
+};
+
+const FIRST_ROOM = 'bedroom';
+const TOTAL_STARS = 5;
+
+/* ========================= engine ========================= */
+
+const TILE = 40, COLS = 15, ROWS = 11;
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const msgEl = document.getElementById('msg');
+
+const isDigit = c => c >= '1' && c <= '9';
+
+let state, anim = null, started = false, shake = 0, muted = false;
+const undoStack = [];
+
+function buildState() {
+  const rooms = {};
+  let start = { room: FIRST_ROOM, x: 1, y: 1 };
+  for (const id in ROOMS) {
+    const src = ROOMS[id];
+    const grid = src.map.map(r => r.split(''));
+    const crates = [], stars = [], keys = [];
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+      const c = grid[y][x];
+      if (c === 'X') { crates.push({ x, y }); grid[y][x] = '.'; }
+      else if (c === '*') { stars.push({ x, y }); grid[y][x] = '.'; }
+      else if (c === 'K') { keys.push({ x, y }); grid[y][x] = '.'; }
+      else if (c === '@') { start = { room: id, x, y }; grid[y][x] = '.'; }
+    }
+    rooms[id] = { grid, crates, stars, keys, gateOpen: false };
+  }
+  const st = { room: start.room, px: start.x, py: start.y, face: 0,
+               keys: 0, stars: 0, rooms, won: false };
+  for (const id in rooms) refreshGates(st, id);
+  return st;
+}
+
+function room(st = state, id = st.room) { return st.rooms[id]; }
+function inBounds(x, y) { return x >= 0 && y >= 0 && x < COLS && y < ROWS; }
+function crateAt(r, x, y) { return r.crates.findIndex(c => c.x === x && c.y === y); }
+
+function refreshGates(st, id) {
+  const r = st.rooms[id];
+  let plates = 0, covered = 0;
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+    if (r.grid[y][x] === 'o') { plates++; if (crateAt(r, x, y) >= 0) covered++; }
+  }
+  r.gateOpen = plates > 0 && plates === covered;
+}
+
+function walkable(r, x, y) {
+  const t = r.grid[y][x];
+  if (t === '#' || t === '~') return false;
+  if (t === 'G') return r.gateOpen;
+  if (t === 'D') return false;
+  return true;
+}
+
+function crateCanEnter(r, x, y) {
+  if (!inBounds(x, y)) return false;
+  if (crateAt(r, x, y) >= 0) return false;
+  const t = r.grid[y][x];
+  return t === '.' || t === 'o' || t === '=' || t === '~' || t === 'd';
+}
+
+/* ---------- undo ---------- */
+function snapshot() {
+  undoStack.push(JSON.stringify(state));
+  if (undoStack.length > 250) undoStack.shift();
+}
+function undo() {
+  if (anim || !undoStack.length) return;
+  state = JSON.parse(undoStack.pop());
+  syncHud(); beep(320, .08, 'triangle');
+}
+function restartRoom() {
+  if (anim) return;
+  snapshot();
+  const id = state.room, src = ROOMS[id];
+  const fresh = buildState().rooms[id];
+  state.rooms[id] = fresh;
+  // put the toy back on the doorway it came in through, or the room's start
+  const entry = state.entry && state.entry.room === id ? state.entry : null;
+  if (entry) { state.px = entry.x; state.py = entry.y; }
+  refreshGates(state, id);
+  syncHud(); flash("Room reset."); beep(240, .12, 'triangle');
+}
+
+/* ---------- movement ---------- */
+function tryMove(dx, dy) {
+  if (!started || anim || state.won) return;
+  state.face = dx < 0 ? 3 : dx > 0 ? 1 : dy < 0 ? 0 : 2;
+  const r = room();
+  const nx = state.px + dx, ny = state.py + dy;
+  if (!inBounds(nx, ny)) return nudge();
+
+  const ci = crateAt(r, nx, ny);
+  let movedCrate = null;
+
+  if (ci >= 0) {
+    const cx = nx + dx, cy = ny + dy;
+    if (!walkable(r, nx, ny) || !crateCanEnter(r, cx, cy)) return nudge();
+    snapshot();
+    const c = r.crates[ci];
+    movedCrate = { idx: ci, fx: c.x, fy: c.y };
+    if (r.grid[cy][cx] === '~') {          // crate sinks and becomes a bridge
+      r.grid[cy][cx] = '=';
+      r.crates.splice(ci, 1);
+      movedCrate.sink = true; movedCrate.tx = cx; movedCrate.ty = cy;
+      beep(160, .22, 'sine', .09);
+    } else {
+      c.x = cx; c.y = cy;
+      beep(180, .07, 'square', .05);
+    }
+  } else if (r.grid[ny][nx] === 'D') {
+    if (state.keys <= 0) { flash("It's locked. There must be a key somewhere."); return nudge(); }
+    snapshot();
+    state.keys--; r.grid[ny][nx] = 'd';
+    flash("The key turns with a satisfying click.");
+    beep(520, .1, 'triangle'); beep(720, .16, 'triangle');
+  } else if (!walkable(r, nx, ny)) {
+    return nudge();
+  } else {
+    snapshot();
+  }
+
+  anim = { t: 0, dur: .11, fx: state.px, fy: state.py, crate: movedCrate };
+  state.px = nx; state.py = ny;
+  refreshGates(state, state.room);
+  syncHud();
+}
+
+function finishMove() {
+  const r = room();
+  const t = r.grid[state.py][state.px];
+
+  const si = r.stars.findIndex(s => s.x === state.px && s.y === state.py);
+  if (si >= 0) {
+    r.stars.splice(si, 1); state.stars++;
+    flash("A memory! " + state.stars + " of " + TOTAL_STARS + ".");
+    beep(660, .09, 'triangle'); setTimeout(() => beep(990, .14, 'triangle'), 70);
+  }
+  const ki = r.keys.findIndex(s => s.x === state.px && s.y === state.py);
+  if (ki >= 0) {
+    r.keys.splice(ki, 1); state.keys++;
+    flash("You found a key.");
+    beep(880, .12, 'triangle');
+  }
+
+  if (t === 'H') { win(); return; }
+
+  if (isDigit(t)) {
+    const link = ROOMS[state.room].links[t];
+    if (link) travel(link[0], link[1]);
+  }
+  syncHud();
+}
+
+function travel(toRoom, toPortal) {
+  const r = state.rooms[toRoom];
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+    if (r.grid[y][x] === toPortal) { state.px = x; state.py = y; }
+  }
+  state.room = toRoom;
+  state.entry = { room: toRoom, x: state.px, y: state.py };
+  flash(ROOMS[toRoom].hint);
+  beep(440, .07, 'sine', .04);
+  syncHud();
+}
+
+function nudge() { shake = 6; beep(90, .06, 'square', .04); }
+
+function win() {
+  state.won = true;
+  beep(523, .12); setTimeout(() => beep(659, .12), 110);
+  setTimeout(() => beep(784, .12), 220); setTimeout(() => beep(1047, .3), 330);
+  const all = state.stars === TOTAL_STARS;
+  showOverlay("You made it home.",
+    (all ? "Every memory found — all " + TOTAL_STARS + " of them. "
+         : "You found " + state.stars + " of " + TOTAL_STARS + " memories. ") +
+    "Somebody has been looking for you for a very long time.",
+    "press R to play again");
+}
+
+/* ---------- hud ---------- */
+let msgTimer = 0;
+function flash(text) { msgEl.textContent = text; msgTimer = 4; }
+function syncHud() {
+  document.getElementById('where').textContent = ROOMS[state.room].name;
+  document.getElementById('stars').textContent = state.stars;
+  document.getElementById('keycount').textContent = state.keys;
+}
+function showOverlay(h, p, go) {
+  overlay.innerHTML = '<h2></h2><p></p><div class="go"></div>';
+  overlay.querySelector('h2').textContent = h;
+  overlay.querySelector('p').textContent = p;
+  overlay.querySelector('.go').textContent = go;
+  overlay.style.display = 'flex';
+}
+function hideOverlay() { overlay.style.display = 'none'; }
+
+/* ---------- sound ---------- */
+let ac = null;
+function beep(freq, dur, type = 'sine', vol = .06) {
+  if (muted) return;
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + dur);
+  } catch (e) {}
+}
+
+/* ---------- drawing ---------- */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+function drawTile(c, x, y, r, time) {
+  const px = x * TILE, py = y * TILE;
+
+  // floor underneath everything walkable
+  if (c !== '#') {
+    ctx.fillStyle = ((x + y) % 2) ? '#3d3350' : '#413659';
+    ctx.fillRect(px, py, TILE, TILE);
+  }
+
+  switch (c) {
+    case '#': {
+      ctx.fillStyle = '#2a2138'; ctx.fillRect(px, py, TILE, TILE);
+      ctx.fillStyle = '#544271'; rr(px + 2, py + 2, TILE - 4, TILE - 8, 5); ctx.fill();
+      ctx.fillStyle = '#6b5590'; rr(px + 2, py + 2, TILE - 4, 10, 5); ctx.fill();
+      break;
+    }
+    case '~': {
+      ctx.fillStyle = '#274a7a'; ctx.fillRect(px, py, TILE, TILE);
+      ctx.strokeStyle = '#4d86c4'; ctx.lineWidth = 2;
+      for (let i = 0; i < 3; i++) {
+        const yy = py + 10 + i * 11 + Math.sin(time * 2 + x + i) * 1.5;
+        ctx.beginPath(); ctx.moveTo(px + 5, yy);
+        ctx.quadraticCurveTo(px + 14, yy - 4, px + 22, yy);
+        ctx.quadraticCurveTo(px + 30, yy + 4, px + 36, yy); ctx.stroke();
+      }
+      break;
+    }
+    case '=': {
+      ctx.fillStyle = '#274a7a'; ctx.fillRect(px, py, TILE, TILE);
+      ctx.fillStyle = '#8a6b45'; rr(px + 1, py + 6, TILE - 2, TILE - 12, 3); ctx.fill();
+      ctx.strokeStyle = '#6a5033'; ctx.lineWidth = 2;
+      for (let i = 1; i < 4; i++) {
+        ctx.beginPath(); ctx.moveTo(px + i * 10, py + 6); ctx.lineTo(px + i * 10, py + TILE - 6); ctx.stroke();
+      }
+      break;
+    }
+    case 'o': {
+      const on = crateAt(r, x, y) >= 0;
+      ctx.strokeStyle = on ? '#ffd97a' : '#7d6ba0'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(px + 20, py + 20, 11, 0, 7); ctx.stroke();
+      ctx.fillStyle = on ? '#ffd97a55' : '#ffffff10';
+      ctx.beginPath(); ctx.arc(px + 20, py + 20, 8, 0, 7); ctx.fill();
+      break;
+    }
+    case 'G': {
+      if (r.gateOpen) {
+        ctx.strokeStyle = '#ffd97a44'; ctx.lineWidth = 2;
+        ctx.strokeRect(px + 4, py + 4, TILE - 8, TILE - 8);
+      } else {
+        ctx.fillStyle = '#8f7fae';
+        for (let i = 0; i < 3; i++) rr(px + 6 + i * 10, py + 2, 6, TILE - 4, 3), ctx.fill();
+        ctx.fillStyle = '#b3a3d0'; rr(px + 2, py + 4, TILE - 4, 5, 2); ctx.fill();
+      }
+      break;
+    }
+    case 'D': {
+      ctx.fillStyle = '#7a5334'; rr(px + 3, py + 1, TILE - 6, TILE - 2, 4); ctx.fill();
+      ctx.fillStyle = '#5e3f27'; rr(px + 7, py + 5, TILE - 14, TILE - 10, 3); ctx.fill();
+      ctx.fillStyle = '#ffd97a';
+      ctx.beginPath(); ctx.arc(px + 26, py + 20, 3, 0, 7); ctx.fill();
+      break;
+    }
+    case 'd': {
+      ctx.fillStyle = '#7a533455'; ctx.fillRect(px + 3, py + 1, 5, TILE - 2);
+      ctx.fillRect(px + TILE - 8, py + 1, 5, TILE - 2);
+      break;
+    }
+    case 'H': {
+      const glow = .55 + Math.sin(time * 2) * .12;
+      ctx.fillStyle = 'rgba(255,207,107,' + (glow * .35) + ')';
+      ctx.beginPath(); ctx.arc(px + 20, py + 20, 22, 0, 7); ctx.fill();
+      ctx.fillStyle = '#e8dccb'; rr(px + 8, py + 18, 24, 18, 2); ctx.fill();
+      ctx.fillStyle = '#c05a52';
+      ctx.beginPath(); ctx.moveTo(px + 5, py + 19); ctx.lineTo(px + 20, py + 6);
+      ctx.lineTo(px + 35, py + 19); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffcf6b'; ctx.fillRect(px + 16, py + 24, 8, 12);
+      break;
+    }
+    default: {
+      if (isDigit(c)) {
+        const glow = .5 + Math.sin(time * 3 + x) * .2;
+        ctx.fillStyle = 'rgba(255,158,196,' + (glow * .3) + ')';
+        ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = '#241a30'; rr(px + 6, py + 6, TILE - 12, TILE - 12, 6); ctx.fill();
+        ctx.strokeStyle = '#ff9ec4'; ctx.lineWidth = 2;
+        rr(px + 6, py + 6, TILE - 12, TILE - 12, 6); ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawCrate(cx, cy) {
+  ctx.fillStyle = '#00000033';
+  ctx.beginPath(); ctx.ellipse(cx + 20, cy + 35, 15, 5, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#b78248'; rr(cx + 4, cy + 4, TILE - 8, TILE - 8, 5); ctx.fill();
+  ctx.fillStyle = '#8f6335'; rr(cx + 4, cy + 4, TILE - 8, 7, 5); ctx.fill();
+  ctx.strokeStyle = '#7a5330'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx + 7, cy + 7); ctx.lineTo(cx + TILE - 7, cy + TILE - 7);
+  ctx.moveTo(cx + TILE - 7, cy + 7); ctx.lineTo(cx + 7, cy + TILE - 7);
+  ctx.stroke();
+}
+
+function drawStar(cx, cy, time) {
+  const s = 8 + Math.sin(time * 3) * 1.6, a = time * 1.2;
+  ctx.save(); ctx.translate(cx + 20, cy + 20 + Math.sin(time * 2) * 2); ctx.rotate(a);
+  ctx.fillStyle = '#ffcf6b'; ctx.shadowColor = '#ffcf6b'; ctx.shadowBlur = 14;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const rad = i % 2 ? s * .38 : s, an = i * Math.PI / 4;
+    ctx.lineTo(Math.cos(an) * rad, Math.sin(an) * rad);
+  }
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function drawKey(cx, cy, time) {
+  ctx.save(); ctx.translate(cx + 20, cy + 20 + Math.sin(time * 2.4) * 2.5);
+  ctx.fillStyle = '#ffd97a'; ctx.shadowColor = '#ffd97a'; ctx.shadowBlur = 10;
+  ctx.beginPath(); ctx.arc(-5, 0, 6, 0, 7); ctx.fill();
+  ctx.fillRect(-1, -2.5, 14, 5);
+  ctx.fillRect(8, 2, 3, 6); ctx.fillRect(12, 2, 3, 5);
+  ctx.restore();
+}
+
+function drawToy(cx, cy, face, hop, time) {
+  const bob = Math.sin(time * 3) * 1.2;
+  const y = cy + bob - hop;
+  ctx.fillStyle = '#00000038';
+  ctx.beginPath(); ctx.ellipse(cx + 20, cy + 34, 12 + hop * .4, 4.5, 0, 0, 7); ctx.fill();
+
+  const body = '#f3e2d0', shade = '#dcc4ad', pink = '#ff9ec4';
+  // ears
+  ctx.fillStyle = body;
+  ctx.save(); ctx.translate(cx + 13, y + 12); ctx.rotate(-.35);
+  ctx.beginPath(); ctx.ellipse(0, -8, 4, 10, 0, 0, 7); ctx.fill(); ctx.restore();
+  ctx.save(); ctx.translate(cx + 27, y + 13); ctx.rotate(.75);
+  ctx.beginPath(); ctx.ellipse(0, -7, 4, 9, 0, 0, 7); ctx.fill(); ctx.restore();
+  ctx.fillStyle = pink;
+  ctx.save(); ctx.translate(cx + 13, y + 11); ctx.rotate(-.35);
+  ctx.beginPath(); ctx.ellipse(0, -7, 1.8, 6, 0, 0, 7); ctx.fill(); ctx.restore();
+
+  // body + head
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.ellipse(cx + 20, y + 27, 11, 9, 0, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx + 20, y + 16, 9.5, 8.5, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = shade;
+  ctx.beginPath(); ctx.ellipse(cx + 20, y + 30, 9, 5, 0, 0, 7); ctx.fill();
+
+  // stitched seam
+  ctx.strokeStyle = '#c0a68e'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+  ctx.beginPath(); ctx.moveTo(cx + 20, y + 20); ctx.lineTo(cx + 20, y + 34); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // face
+  const ox = face === 1 ? 2 : face === 3 ? -2 : 0;
+  const oy = face === 2 ? 1.5 : face === 0 ? -1 : 0;
+  if (face !== 0) {
+    ctx.fillStyle = '#3b2b34';
+    ctx.beginPath(); ctx.arc(cx + 16 + ox, y + 15 + oy, 1.7, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + 24 + ox, y + 15 + oy, 1.7, 0, 7); ctx.fill();
+    ctx.fillStyle = pink;
+    ctx.beginPath(); ctx.arc(cx + 20 + ox, y + 19 + oy, 1.6, 0, 7); ctx.fill();
+  }
+}
+
+let last = 0, hopT = 0;
+function frame(ts) {
+  const dt = Math.min(.05, (ts - last) / 1000 || 0); last = ts;
+  const time = ts / 1000;
+
+  if (anim) {
+    anim.t += dt;
+    if (anim.t >= anim.dur) { const done = anim; anim = null; finishMove(); if (!anim) hopT = 0; }
+  }
+  if (shake > 0) shake = Math.max(0, shake - dt * 40);
+
+  const r = room();
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+
+  ctx.fillStyle = '#241a30'; ctx.fillRect(-10, -10, cv.width + 20, cv.height + 20);
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) drawTile(r.grid[y][x], x, y, r, time);
+
+  for (const s of r.stars) drawStar(s.x * TILE, s.y * TILE, time);
+  for (const k of r.keys) drawKey(k.x * TILE, k.y * TILE, time);
+
+  const p = anim ? anim.t / anim.dur : 1;
+  const ease = p * p * (3 - 2 * p);
+
+  r.crates.forEach((c, i) => {
+    let cx = c.x * TILE, cy = c.y * TILE;
+    if (anim && anim.crate && anim.crate.idx === i && !anim.crate.sink) {
+      cx = (anim.crate.fx + (c.x - anim.crate.fx) * ease) * TILE;
+      cy = (anim.crate.fy + (c.y - anim.crate.fy) * ease) * TILE;
+    }
+    drawCrate(cx, cy);
+  });
+  if (anim && anim.crate && anim.crate.sink) {
+    const c = anim.crate;
+    ctx.save(); ctx.globalAlpha = 1 - ease;
+    drawCrate((c.fx + (c.tx - c.fx) * ease) * TILE, (c.fy + (c.ty - c.fy) * ease) * TILE);
+    ctx.restore();
+  }
+
+  let tx = state.px * TILE, ty = state.py * TILE, hop = 0;
+  if (anim) {
+    tx = (anim.fx + (state.px - anim.fx) * ease) * TILE;
+    ty = (anim.fy + (state.py - anim.fy) * ease) * TILE;
+    hop = Math.sin(p * Math.PI) * 4;
+  }
+  drawToy(tx, ty, state.face, hop, time);
+
+  // vignette
+  const g = ctx.createRadialGradient(300, 220, 140, 300, 220, 400);
+  g.addColorStop(0, '#0000'); g.addColorStop(1, '#0000005e');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.restore();
+
+  if (msgTimer > 0) { msgTimer -= dt; if (msgTimer <= 0) msgEl.textContent = ''; }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- input ---------- */
+const held = new Set();
+const DIRS = {
+  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+  w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0]
+};
+
+function begin() {
+  if (started) return;
+  started = true; hideOverlay(); flash(ROOMS[state.room].hint);
+}
+
+function restartGame() {
+  state = buildState(); undoStack.length = 0; anim = null;
+  hideOverlay(); started = true; syncHud(); flash(ROOMS[state.room].hint);
+}
+
+addEventListener('keydown', e => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (!started) { begin(); e.preventDefault(); return; }
+  if (state.won) { if (k === 'r') restartGame(); return; }
+  if (DIRS[k]) { held.add(k); step(); e.preventDefault(); }
+  else if (k === 'z') undo();
+  else if (k === 'r') restartRoom();
+  else if (k === 'm') { muted = !muted; flash(muted ? 'Sound off.' : 'Sound on.'); }
+});
+addEventListener('keyup', e => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  held.delete(k);
+});
+
+function step() {
+  if (anim || !held.size) return;
+  const k = [...held].pop();
+  if (DIRS[k]) tryMove(DIRS[k][0], DIRS[k][1]);
+}
+setInterval(step, 40);
+
+// touch: swipe to walk
+let tsx = 0, tsy = 0;
+cv.addEventListener('touchstart', e => {
+  if (!started) { begin(); return; }
+  const t = e.touches[0]; tsx = t.clientX; tsy = t.clientY;
+}, { passive: true });
+cv.addEventListener('touchend', e => {
+  const t = e.changedTouches[0];
+  const dx = t.clientX - tsx, dy = t.clientY - tsy;
+  if (Math.abs(dx) < 18 && Math.abs(dy) < 18) return;
+  if (state.won) { restartGame(); return; }
+  if (Math.abs(dx) > Math.abs(dy)) tryMove(Math.sign(dx), 0);
+  else tryMove(0, Math.sign(dy));
+}, { passive: true });
+overlay.addEventListener('click', () => { state && state.won ? restartGame() : begin(); });
+
+state = buildState();
+syncHud();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
